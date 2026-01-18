@@ -1,0 +1,1512 @@
+// ===== PWA (APP INSTALL) SETUP =====
+let deferredPrompt;
+const installButton = document.getElementById('installButton');
+const offlineMessage = document.getElementById('offlineMessage');
+
+// Listen for beforeinstallprompt event (when browser thinks app can be installed)
+window.addEventListener('beforeinstallprompt', (e) => {
+    console.log('🎯 PWA: Installation available');
+    e.preventDefault();
+    deferredPrompt = e;
+    
+    // Show install button with animation
+    if (installButton) {
+        installButton.style.display = 'block';
+        installButton.style.animation = 'pulse 2s infinite';
+    }
+});
+
+// Install button click handler
+if (installButton) {
+    installButton.addEventListener('click', async () => {
+        if (!deferredPrompt) {
+            alert('Installation not available. Please try again later or follow manual instructions below.');
+            return;
+        }
+        
+        installButton.innerHTML = '⏳ Installing...';
+        installButton.disabled = true;
+        
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        
+        console.log(`User response to install prompt: ${outcome}`);
+        deferredPrompt = null;
+        
+        if (outcome === 'accepted') {
+            installButton.innerHTML = '✅ Installed!';
+            installButton.style.background = 'linear-gradient(135deg, var(--success), #00a844)';
+            installButton.style.animation = 'none';
+            
+            // Show success message
+            setTimeout(() => {
+                installButton.style.display = 'none';
+                alert('🎉 OSM Counter App installed successfully!\n\nYou can now open it from your home screen like any other app!');
+            }, 1500);
+        } else {
+            installButton.innerHTML = '📱 Install OSM Counter App';
+            installButton.disabled = false;
+            alert('Installation cancelled. You can still use the website normally. Tap "Install App" anytime to install.');
+        }
+    });
+}
+
+// Register Service Worker for offline support
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js')
+            .then(registration => {
+                console.log('✅ Service Worker registered:', registration);
+                
+                // Check for updates
+                registration.addEventListener('updatefound', () => {
+                    const newWorker = registration.installing;
+                    console.log('🔄 New Service Worker found:', newWorker);
+                });
+            })
+            .catch(error => {
+                console.log('❌ Service Worker registration failed:', error);
+            });
+    });
+}
+
+// Online/Offline detection
+window.addEventListener('online', () => {
+    if (offlineMessage) {
+        offlineMessage.style.display = 'none';
+    }
+    console.log('✅ Back online');
+});
+
+window.addEventListener('offline', () => {
+    if (offlineMessage) {
+        offlineMessage.style.display = 'block';
+    }
+    console.log('⚠️ Offline mode');
+});
+
+// ===== FORMATION DATABASE =====
+const FORMATIONS = [
+    '433A', '433B', '442A', '442B', '4231', '4321',
+    '352', '343A', '343B', '532', '523', '541A', '541B',
+    '451', '4141', '4411', '5221', '3421', '334', '631A', '631B'
+];
+
+// ===== GLOBAL VARIABLES FOR RESULTS =====
+let currentResults = null;
+let alternativeFormationsData = [];
+let hasShownSubscriptionPopup = false;
+
+// ===== OPPONENT FORMATION PRESETS WITH OSM TACTICS DATA =====
+const OPPONENT_PRESETS = {
+    '433A': { 
+        playStyle: 'wing', 
+        marking: 'zonal', 
+        counterFormations: ['442B', '532', '352'],
+        advice: 'Use 442B to counter wingers. Focus on compact midfield. Mark opposing wingers tightly.',
+        keyTactics: {
+            pressing: 60,
+            style: 55,
+            tempo: 75,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Attacking full-backs',
+            marking: 'zonal'
+        }
+    },
+    '433B': { 
+        playStyle: 'wing', 
+        marking: 'zonal', 
+        counterFormations: ['442A', '532', '4411'],
+        advice: 'Use 442A with compact midfield. Press high to disrupt build-up.',
+        keyTactics: {
+            pressing: 65,
+            style: 50,
+            tempo: 70,
+            forwards: 'Attack only',
+            midfielders: 'Stay in position',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '442A': { 
+        playStyle: 'passing', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '4231', '352'],
+        advice: 'Use 433A to overload midfield. Play through the middle.',
+        keyTactics: {
+            pressing: 55,
+            style: 60,
+            tempo: 70,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '442B': { 
+        playStyle: 'wing', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '352', '343A'],
+        advice: 'Use 433A with attacking wingers. Match them on the flanks.',
+        keyTactics: {
+            pressing: 60,
+            style: 65,
+            tempo: 75,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Attacking full-backs',
+            marking: 'zonal'
+        }
+    },
+    '4231': { 
+        playStyle: 'passing', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442A', '352'],
+        advice: 'Use 433A to press the double pivot. Target space behind attacking midfielder.',
+        keyTactics: {
+            pressing: 65,
+            style: 55,
+            tempo: 70,
+            forwards: 'Support midfield',
+            midfielders: 'Protect the defenders',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '352': { 
+        playStyle: 'passing', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442B', '343A'],
+        advice: 'Use 433A with wingers to exploit flanks. Press the wing-backs.',
+        keyTactics: {
+            pressing: 70,
+            style: 60,
+            tempo: 80,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Attacking full-backs',
+            marking: 'zonal'
+        }
+    },
+    '343A': { 
+        playStyle: 'wing', 
+        marking: 'man', 
+        counterFormations: ['532', '541A', '442A'],
+        advice: 'Use 532 to defend deep. Counter attack through middle.',
+        keyTactics: {
+            pressing: 40,
+            style: 35,
+            tempo: 65,
+            forwards: 'Help defend',
+            midfielders: 'Protect the defenders',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '343B': { 
+        playStyle: 'wing', 
+        marking: 'man', 
+        counterFormations: ['532', '541B', '442A'],
+        advice: 'Use 532 compact defense. Exploit spaces behind wingers.',
+        keyTactics: {
+            pressing: 45,
+            style: 40,
+            tempo: 70,
+            forwards: 'Help defend',
+            midfielders: 'Protect the defenders',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '532': { 
+        playStyle: 'counter', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442A', '4231'],
+        advice: 'Use 433A with patient build-up. Stretch the back 5.',
+        keyTactics: {
+            pressing: 70,
+            style: 65,
+            tempo: 75,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Move forward',
+            marking: 'zonal'
+        }
+    },
+    '541A': { 
+        playStyle: 'counter', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '352', '343A'],
+        advice: 'Use 433A with high tempo. Overload the flanks.',
+        keyTactics: {
+            pressing: 75,
+            style: 70,
+            tempo: 80,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '541B': { 
+        playStyle: 'counter', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442A', '4231'],
+        advice: 'Use 433A to stretch the defense. Focus on wing play.',
+        keyTactics: {
+            pressing: 70,
+            style: 65,
+            tempo: 75,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '631A': { 
+        playStyle: 'counter', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442A', '4231'],
+        advice: 'Against 631A: Use 433A to exploit width. Attack with wingers against their back 6.',
+        keyTactics: {
+            pressing: 80,
+            style: 75,
+            tempo: 85,
+            forwards: 'Attack only',
+            midfielders: 'Go forward',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '631B': { 
+        playStyle: 'counter', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '442A', '4231'],
+        advice: 'Against 631B: Use 433A with patient build-up. Look for spaces in midfield.',
+        keyTactics: {
+            pressing: 70,
+            style: 60,
+            tempo: 70,
+            forwards: 'Support midfield',
+            midfielders: 'Stay in position',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    },
+    '451': { 
+        playStyle: 'passing', 
+        marking: 'zonal', 
+        counterFormations: ['433A', '352', '343A'],
+        advice: 'Use 433A to match midfield. Target space behind lone striker.',
+        keyTactics: {
+            pressing: 60,
+            style: 55,
+            tempo: 70,
+            forwards: 'Support midfield',
+            midfielders: 'Stay in position',
+            defenders: 'Stay behind',
+            marking: 'zonal'
+        }
+    }
+};
+
+// ===== INITIALIZE APP =====
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Initializing OSM Counter Engine...');
+    
+    // Populate formations immediately
+    populateFormationSelects();
+    initializeWeekTracking();
+    updatePitchVisibility();
+    
+    // Set up event listeners
+    setupEventListeners();
+    
+    console.log('✅ OSM Counter Engine initialized successfully!');
+    
+    // Show PWA install instructions if on mobile
+    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+        console.log('📱 Mobile device detected - PWA ready');
+    }
+});
+
+function populateFormationSelects() {
+    console.log('📋 Populating formation selects...');
+    
+    // Populate both formation dropdowns
+    const selects = ['oppFormQuick', 'oppForm'];
+    
+    selects.forEach(id => {
+        const select = document.getElementById(id);
+        if (select) {
+            // Clear existing options
+            select.innerHTML = '<option value="">Select Formation</option>';
+            
+            // Add all formations
+            FORMATIONS.forEach(formation => {
+                const option = document.createElement('option');
+                option.value = formation;
+                option.textContent = formation;
+                select.appendChild(option);
+            });
+            
+            console.log(`✅ Added ${FORMATIONS.length} formations to ${id}`);
+        } else {
+            console.log(`❌ Select element not found: ${id}`);
+        }
+    });
+}
+
+function setupEventListeners() {
+    console.log('🔗 Setting up event listeners...');
+    
+    // Setup slider value displays for opponent adjustments
+    const sliders = ['myPressing', 'myStyle', 'myTempo'];
+    sliders.forEach(sliderId => {
+        const slider = document.getElementById(sliderId);
+        const display = document.getElementById(sliderId + 'Val');
+        
+        if (slider && display) {
+            slider.addEventListener('input', function() {
+                display.textContent = this.value;
+            });
+        }
+    });
+    
+    // Setup venue change for pitch level
+    const venueSelect = document.getElementById('venue');
+    if (venueSelect) {
+        venueSelect.addEventListener('change', function() {
+            togglePitchLevel();
+        });
+    }
+    
+    // When opponent formation changes, update opponent marking and optimal tactics
+    const oppFormSelect = document.getElementById('oppForm');
+    if (oppFormSelect) {
+        oppFormSelect.addEventListener('change', function() {
+            updateOpponentSettings();
+        });
+    }
+    
+    // When any opponent setting changes, update optimal tactics
+    const oppSettings = ['oppPlayStyle', 'oppMarking', 'strengthLevel'];
+    oppSettings.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.addEventListener('change', function() {
+                updateOptimalOpponentTactics();
+            });
+        }
+    });
+    
+    // Enter key for email subscription
+    const emailInputs = ['subscribeEmail', 'popupEmail'];
+    emailInputs.forEach(id => {
+        const input = document.getElementById(id);
+        if (input) {
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    if (id === 'subscribeEmail') {
+                        handleEmailSubscription();
+                    } else if (id === 'popupEmail') {
+                        handlePopupSubscription();
+                    }
+                }
+            });
+        }
+    });
+    
+    // Check if we're running as a PWA (installed app)
+    if (window.matchMedia('(display-mode: standalone)').matches || 
+        window.navigator.standalone === true) {
+        console.log('📱 Running as installed PWA');
+        document.body.classList.add('pwa-mode');
+    }
+}
+
+function initializeWeekTracking() {
+    const now = new Date();
+    const weekId = getWeekId(now);
+    const stored = localStorage.getItem('osm_week');
+    
+    if (stored !== weekId) {
+        localStorage.setItem('osm_week', weekId);
+        localStorage.setItem('osm_free_uses', '2');
+        hasShownSubscriptionPopup = false; // Reset popup for new week
+    }
+    
+    const weekIdElement = document.getElementById('weekId');
+    if (weekIdElement) {
+        weekIdElement.textContent = weekId;
+    }
+    updateFreeUsesDisplay();
+}
+
+function getWeekId(date) {
+    const year = date.getFullYear();
+    const week = Math.ceil((date - new Date(year, 0, 1)) / 604800000);
+    return `${year}-W${week}`;
+}
+
+function updateFreeUsesDisplay() {
+    const uses = localStorage.getItem('osm_free_uses') || '2';
+    const freeUsesElement = document.getElementById('freeUses');
+    if (freeUsesElement) {
+        freeUsesElement.textContent = uses;
+    }
+}
+
+function togglePitchLevel() {
+    const venue = document.getElementById('venue').value;
+    const pitchGroup = document.getElementById('pitchGroup');
+    if (venue === 'away') {
+        pitchGroup.style.display = 'none';
+    } else {
+        pitchGroup.style.display = 'block';
+    }
+}
+
+function updatePitchVisibility() {
+    togglePitchLevel();
+}
+
+// ===== UPDATE OPPONENT SETTINGS BASED ON FORMATION =====
+function updateOpponentSettings() {
+    const oppForm = document.getElementById('oppForm').value;
+    if (!oppForm) return;
+    
+    const preset = OPPONENT_PRESETS[oppForm];
+    if (preset) {
+        // Set opponent marking
+        const oppMarkingSelect = document.getElementById('oppMarking');
+        if (oppMarkingSelect) {
+            oppMarkingSelect.value = preset.marking;
+        }
+        
+        // Set opponent playing style (but allow user to change it)
+        const oppPlayStyleSelect = document.getElementById('oppPlayStyle');
+        if (oppPlayStyleSelect) {
+            oppPlayStyleSelect.value = preset.playStyle;
+        }
+        
+        // Update optimal opponent tactics
+        updateOptimalOpponentTactics();
+    }
+}
+
+// ===== CALCULATE OPTIMAL OPPONENT TACTICS BASED ON OSM GUIDE =====
+function updateOptimalOpponentTactics() {
+    const oppForm = document.getElementById('oppForm').value;
+    const oppPlayStyle = document.getElementById('oppPlayStyle').value;
+    const oppMarking = document.getElementById('oppMarking').value;
+    const strengthLevel = document.getElementById('strengthLevel').value;
+    
+    if (!oppForm || !oppPlayStyle) return;
+    
+    // Get optimal tactics based on OSM guide logic
+    const optimalTactics = calculateOptimalOpponentTactics(oppForm, oppPlayStyle, oppMarking, strengthLevel);
+    
+    if (!optimalTactics) return;
+    
+    // Update "Your opponent's tactics" section with optimal values
+    updateSlider('myPressing', optimalTactics.pressing);
+    updateSlider('myStyle', optimalTactics.style);
+    updateSlider('myTempo', optimalTactics.tempo);
+    
+    setSelectValue('myForwards', optimalTactics.forwards);
+    setSelectValue('myMidfielders', optimalTactics.midfielders);
+    setSelectValue('myDefenders', optimalTactics.defenders);
+    setSelectValue('myMarking', optimalTactics.marking);
+}
+
+function calculateOptimalOpponentTactics(oppForm, oppPlayStyle, oppMarking, strengthLevel) {
+    // Start with base tactics from preset
+    const preset = OPPONENT_PRESETS[oppForm] || OPPONENT_PRESETS['433A'];
+    let tactics = { ...preset.keyTactics };
+    
+    // ===== ADJUST BASED ON OPPONENT PLAYING STYLE (OSM Guide Pt.2) =====
+    
+    // 1. Pressing adjustments based on style
+    if (oppPlayStyle === 'counter') {
+        // Counter attack: low press to defend deep and launch fast attacks
+        tactics.pressing = Math.max(30, tactics.pressing - 20);
+        tactics.style = Math.max(30, tactics.style - 15);
+        tactics.tempo = Math.min(100, tactics.tempo + 10); // Fast transitions
+        tactics.midfielders = 'Protect the defenders';
+        tactics.forwards = 'Attack only';
+    }
+    
+    if (oppPlayStyle === 'passing') {
+        // Passing game: high press to control possession
+        tactics.pressing = Math.min(90, tactics.pressing + 10);
+        tactics.style = Math.min(85, tactics.style + 5);
+        tactics.tempo = Math.max(50, tactics.tempo - 10); // Slower tempo for possession
+        tactics.midfielders = 'Stay in position';
+        tactics.forwards = 'Support midfield';
+    }
+    
+    if (oppPlayStyle === 'wing') {
+        // Wing play: balanced press, attacking full-backs
+        tactics.pressing = 60;
+        tactics.style = 65;
+        tactics.tempo = 75; // Fast tempo for wing attacks
+        tactics.defenders = 'Attacking full-backs';
+        tactics.forwards = 'Attack only';
+        tactics.marking = 'man'; // Man marking against wingers
+    }
+    
+    if (oppPlayStyle === 'long') {
+        // Long ball: low press, direct play
+        tactics.pressing = Math.max(35, tactics.pressing - 15);
+        tactics.style = Math.max(40, tactics.style - 10);
+        tactics.tempo = Math.min(100, tactics.tempo + 15); // Very fast direct play
+        tactics.midfielders = 'Protect the defenders';
+        tactics.forwards = 'Attack only';
+    }
+    
+    if (oppPlayStyle === 'shoot') {
+        // Shoot on sight: high press, risky play
+        tactics.pressing = Math.min(95, tactics.pressing + 15);
+        tactics.style = Math.min(95, tactics.style + 15);
+        tactics.tempo = Math.min(100, tactics.tempo + 10); // Fast tempo for shots
+        tactics.forwards = 'Attack only';
+        tactics.midfielders = 'Go forward';
+    }
+    
+    // ===== ADJUST BASED ON RELATIVE TEAM STRENGTH (OSM Guide Pt.2) =====
+    
+    if (strengthLevel === 'much-weaker' || strengthLevel === 'weaker') {
+        // When opponent is stronger: play defensively
+        tactics.pressing = Math.max(30, tactics.pressing - 15);
+        tactics.style = Math.max(25, tactics.style - 15);
+        tactics.tempo = Math.max(50, tactics.tempo - 10);
+        tactics.midfielders = 'Protect the defenders';
+        tactics.forwards = 'Help defend';
+        tactics.defenders = 'Stay behind';
+    }
+    
+    if (strengthLevel === 'stronger' || strengthLevel === 'much-stronger') {
+        // When opponent is weaker: play offensively
+        tactics.pressing = Math.min(90, tactics.pressing + 15);
+        tactics.style = Math.min(90, tactics.style + 15);
+        tactics.tempo = Math.min(100, tactics.tempo + 10);
+        tactics.midfielders = 'Go forward';
+        tactics.forwards = 'Attack only';
+        
+        // Attacking full-backs when opponent is weaker (except against wing play)
+        if (oppPlayStyle !== 'wing') {
+            tactics.defenders = 'Attacking full-backs';
+        }
+    }
+    
+    // ===== ADJUST BASED ON FORMATION TYPE (OSM Guide Pt.2) =====
+    
+    // Formations with 4 or less defenders: more attacking
+    if (['433A', '433B', '442A', '442B', '352', '343A', '343B'].includes(oppForm)) {
+        tactics.pressing = Math.min(95, tactics.pressing + 5);
+        tactics.style = Math.min(90, tactics.style + 5);
+    }
+    
+    // Formations with 5 or more defenders: more defensive
+    if (['532', '541A', '541B', '631A', '631B'].includes(oppForm)) {
+        tactics.pressing = Math.max(35, tactics.pressing - 10);
+        tactics.style = Math.max(30, tactics.style - 10);
+        tactics.defenders = 'Stay behind';
+        tactics.midfielders = 'Protect the defenders';
+    }
+    
+    // Formations with 3 at the back: avoid attacking full-backs against wing play
+    if (['352', '343A', '343B', '532'].includes(oppForm) && oppPlayStyle === 'wing') {
+        tactics.defenders = 'Stay behind';
+    }
+    
+    // ===== SPECIAL RULES FROM OSM GUIDE =====
+    
+    // NEVER use attacking full-backs if opponent is on "wing play" (from guide)
+    if (oppPlayStyle === 'wing') {
+        tactics.defenders = 'Stay behind';
+    }
+    
+    // For 433B with wing play: midfielders should push forward (from guide)
+    if (oppForm === '433B' && oppPlayStyle === 'wing') {
+        tactics.midfielders = 'Go forward';
+    }
+    
+    // For counter attacks: midfielders protect defense (from guide)
+    if (oppPlayStyle === 'counter') {
+        tactics.midfielders = 'Protect the defenders';
+    }
+    
+    // For passing game: midfielders stay in position (from guide)
+    if (oppPlayStyle === 'passing') {
+        tactics.midfielders = 'Stay in position';
+    }
+    
+    // For shoot on sight: forwards attack only (from guide)
+    if (oppPlayStyle === 'shoot') {
+        tactics.forwards = 'Attack only';
+    }
+    
+    return tactics;
+}
+
+function updateSlider(id, value) {
+    const slider = document.getElementById(id);
+    const display = document.getElementById(id + 'Val');
+    if (slider) {
+        slider.value = value;
+    }
+    if (display) {
+        display.textContent = value;
+    }
+}
+
+function setSelectValue(id, value) {
+    const select = document.getElementById(id);
+    if (select) {
+        select.value = value;
+    }
+}
+
+// ===== EMAIL SUBSCRIPTION FUNCTIONS =====
+function handleEmailSubscription() {
+    const emailInput = document.getElementById('subscribeEmail');
+    const email = emailInput.value.trim();
+    
+    if (!validateEmail(email)) {
+        alert('Please enter a valid email address.');
+        return;
+    }
+    
+    // In a real app, you would send this to your backend
+    console.log('📧 Email subscription:', email);
+    
+    // Store subscription in localStorage
+    localStorage.setItem('osm_subscribed', 'true');
+    localStorage.setItem('osm_subscriber_email', email);
+    
+    // Add 2 extra free uses for subscribers
+    const currentUses = parseInt(localStorage.getItem('osm_free_uses') || '2');
+    localStorage.setItem('osm_free_uses', (currentUses + 2).toString());
+    
+    // Update display
+    updateFreeUsesDisplay();
+    
+    // Show success message
+    emailInput.value = '';
+    alert(`Thank you for subscribing! You've received 2 extra free counter strategies this week. 📧\n\n📱 INSTALL AS APP: The "Install App" button will appear soon. Tap it to add OSM Counter to your home screen for the best experience!`);
+    
+    // Show PWA install button after subscription
+    if (installButton && deferredPrompt) {
+        setTimeout(() => {
+            installButton.style.display = 'block';
+            installButton.style.animation = 'pulse 2s infinite';
+        }, 1000);
+    }
+}
+
+function handlePopupSubscription() {
+    const emailInput = document.getElementById('popupEmail');
+    const email = emailInput.value.trim();
+    
+    if (!validateEmail(email)) {
+        alert('Please enter a valid email address.');
+        return;
+    }
+    
+    // In a real app, you would send this to your backend
+    console.log('📧 Popup email subscription:', email);
+    
+    // Store subscription in localStorage
+    localStorage.setItem('osm_subscribed', 'true');
+    localStorage.setItem('osm_subscriber_email', email);
+    
+    // Add 2 extra free uses for subscribers
+    const currentUses = parseInt(localStorage.getItem('osm_free_uses') || '2');
+    localStorage.setItem('osm_free_uses', (currentUses + 2).toString());
+    
+    // Update display
+    updateFreeUsesDisplay();
+    
+    // Close popup
+    closeSubscriptionPopup();
+    
+    // Show success message
+    emailInput.value = '';
+    alert(`Thank you for subscribing! You've received 2 extra free counter strategies this week. 📧\n\n📱 INSTALL AS APP: The "Install App" button will appear soon. Tap it to add OSM Counter to your home screen for the best experience!`);
+    
+    // Show PWA install button after subscription
+    if (installButton && deferredPrompt) {
+        setTimeout(() => {
+            installButton.style.display = 'block';
+            installButton.style.animation = 'pulse 2s infinite';
+        }, 1000);
+    }
+}
+
+function validateEmail(email) {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email);
+}
+
+// ===== SUBSCRIPTION POPUP FUNCTIONS =====
+function showSubscriptionPopup() {
+    const popup = document.getElementById('subscriptionPopup');
+    if (popup) {
+        popup.style.display = 'flex';
+        document.body.style.overflow = 'hidden'; // Prevent scrolling
+        
+        // Reset email input
+        const emailInput = document.getElementById('popupEmail');
+        if (emailInput) {
+            emailInput.value = '';
+            emailInput.focus();
+        }
+        
+        hasShownSubscriptionPopup = true;
+    }
+}
+
+function closeSubscriptionPopup() {
+    const popup = document.getElementById('subscriptionPopup');
+    if (popup) {
+        popup.style.display = 'none';
+        document.body.style.overflow = 'auto'; // Re-enable scrolling
+    }
+}
+
+// ===== FREE TIER QUICK COUNTER =====
+function handleFreeCalc() {
+    const uses = parseInt(localStorage.getItem('osm_free_uses') || '2');
+    
+    if (uses <= 0) {
+        const quickResult = document.getElementById('quickResult');
+        if (quickResult) {
+            quickResult.innerHTML = `
+                <strong style="color:#ff9800;">⚠️ Free lookups exhausted</strong><br>
+                Upgrade to unlock unlimited calculations and advanced features!
+            `;
+        }
+        
+        // Show subscription popup when out of free uses
+        if (!hasShownSubscriptionPopup) {
+            setTimeout(showSubscriptionPopup, 1000);
+        }
+        return;
+    }
+    
+    const strength = document.getElementById('strengthQuick').value;
+    const oppForm = document.getElementById('oppFormQuick').value;
+    
+    if (!oppForm) {
+        alert('Please select an opponent formation.');
+        return;
+    }
+    
+    const preset = OPPONENT_PRESETS[oppForm];
+    const quickResult = document.getElementById('quickResult');
+    if (quickResult && preset) {
+        quickResult.innerHTML = `
+            <strong style="color:#00aeef;">🎯 Quick Counter Analysis:</strong><br>
+            <div style="color:#ffb400; margin:10px 0;">Opponent Formation: ${oppForm}</div>
+            <strong style="color:#00aeef;">Your Strength:</strong> ${strength.replace('-', ' ').toUpperCase()}<br><br>
+            <strong>Recommended Counter Formations:</strong><br>
+            ${preset.counterFormations.join(', ')}<br><br>
+            <strong>OSM Advice:</strong> ${preset.advice}<br><br>
+            <em>Use Advanced Tactical Engine for detailed tactical settings and slider recommendations.</em>
+        `;
+    }
+    
+    // Decrease free uses
+    localStorage.setItem('osm_free_uses', (uses - 1).toString());
+    updateFreeUsesDisplay();
+    
+    // Show subscription popup when user has 1 or 0 free uses left
+    const remainingUses = uses - 1;
+    if (remainingUses <= 1 && !hasShownSubscriptionPopup) {
+        setTimeout(showSubscriptionPopup, 1500);
+    }
+}
+
+// ===== FULL ENGINE ANALYSIS =====
+function runFullEngine() {
+    const strength = document.getElementById('strengthLevel').value;
+    const oppForm = document.getElementById('oppForm').value;
+    const oppPlayStyle = document.getElementById('oppPlayStyle').value;
+    const oppMarking = document.getElementById('oppMarking').value;
+    const venue = document.getElementById('venue').value;
+    const pitchLv = parseInt(document.getElementById('pitchLv').value);
+    const campInt = parseInt(document.getElementById('campInt').value);
+    const secret = document.getElementById('secretTrain').checked;
+    
+    if (!oppForm || !oppPlayStyle) {
+        alert('Please select opponent formation and playing style.');
+        return;
+    }
+    
+    // Get user-adjusted opponent tactical settings
+    const opponentPressingOverride = parseInt(document.getElementById('myPressing').value);
+    const opponentStyleSliderOverride = parseInt(document.getElementById('myStyle').value);
+    const opponentTempoOverride = parseInt(document.getElementById('myTempo').value);
+    const opponentMarkingOverride = document.getElementById('myMarking').value;
+    
+    // Get opponent line tactics adjustments
+    const opponentForwardsOverride = document.getElementById('myForwards').value;
+    const opponentMidfieldersOverride = document.getElementById('myMidfielders').value;
+    const opponentDefendersOverride = document.getElementById('myDefenders').value;
+    
+    // Store current results data
+    currentResults = {
+        strength: strength,
+        oppForm: oppForm,
+        oppPlayStyle: oppPlayStyle,
+        oppMarking: oppMarking,
+        venue: venue,
+        pitchLv: pitchLv,
+        campInt: campInt,
+        secret: secret,
+        opponentTactics: {
+            pressing: opponentPressingOverride,
+            style: opponentStyleSliderOverride,
+            tempo: opponentTempoOverride,
+            marking: opponentMarkingOverride,
+            lineTactics: {
+                forwards: opponentForwardsOverride,
+                midfielders: opponentMidfieldersOverride,
+                defenders: opponentDefendersOverride
+            }
+        }
+    };
+    
+    // Get the preset for this opponent formation
+    const preset = OPPONENT_PRESETS[oppForm] || OPPONENT_PRESETS['433A'];
+    
+    // Create alternative formations array (primary + alternatives)
+    alternativeFormationsData = [];
+    const primaryFormation = preset.counterFormations[0];
+    
+    // Add primary formation first
+    alternativeFormationsData.push({
+        formation: primaryFormation,
+        isPrimary: true,
+        rating: 'Primary'
+    });
+    
+    // Add other viable alternatives
+    preset.counterFormations.slice(1).forEach((formation, index) => {
+        alternativeFormationsData.push({
+            formation: formation,
+            isPrimary: false,
+            rating: 'Alternative ' + (index + 1)
+        });
+    });
+    
+    // Calculate and display primary formation
+    calculateAndDisplayFormation(primaryFormation, true);
+    
+    // Show results section
+    const engineResults = document.getElementById('engineResults');
+    if (engineResults) {
+        engineResults.style.display = 'block';
+        engineResults.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+// ===== CALCULATE AND DISPLAY SPECIFIC FORMATION =====
+function calculateAndDisplayFormation(formation, isPrimary) {
+    if (!currentResults) return;
+    
+    // Get opponent settings from current results
+    const { strength, oppForm, oppPlayStyle, oppMarking, venue, pitchLv, campInt, secret, opponentTactics } = currentResults;
+    
+    // Calculate YOUR optimal counter tactics for this specific formation
+    const yourCounterTactics = calculateCounterTacticsForFormation(formation, oppForm, oppPlayStyle, opponentTactics, strength);
+    
+    // Calculate win probability
+    let winProbability = calculateWinProbability(oppForm, oppPlayStyle, oppMarking, strength, yourCounterTactics, formation);
+    
+    // Apply bonuses
+    const bonusResult = applyBonuses(winProbability, venue, pitchLv, campInt, secret);
+    
+    // Show results for this formation
+    showMainCounter(oppForm, oppPlayStyle, oppMarking, formation, yourCounterTactics, bonusResult.probability, bonusResult, isPrimary);
+    showRecommendedSliders(yourCounterTactics);
+    showDetailedBreakdown(oppForm, oppPlayStyle, oppMarking, strength, formation, yourCounterTactics, bonusResult.probability);
+    showAlternativeFormationsGrid(formation);
+}
+
+// ===== CALCULATE COUNTER TACTICS FOR SPECIFIC FORMATION =====
+function calculateCounterTacticsForFormation(formation, oppForm, oppPlayStyle, opponentTactics, strength) {
+    // Start with base counter tactics
+    let yourTactics = {
+        pressing: 60,
+        style: 55,
+        tempo: 70,
+        marking: 'zonal',
+        lineTactics: {
+            forwards: 'Attack only',
+            midfielders: 'Stay in position',
+            defenders: 'Stay behind'
+        }
+    };
+    
+    // ===== ADJUST BASED ON OPPONENT PLAYING STYLE (OSM Guide Pt.2) =====
+    
+    // Counter opponent's playing style
+    if (oppPlayStyle === 'counter') {
+        // Against counter attacks: higher press to disrupt deep defense
+        yourTactics.pressing = 70;
+        yourTactics.style = 60;
+        yourTactics.tempo = 65; // Slower tempo to maintain possession
+        yourTactics.midfielders = 'Protect the defenders';
+        yourTactics.marking = 'zonal'; // Zonal against counter attacks
+    }
+    
+    if (oppPlayStyle === 'passing') {
+        // Against passing game: high press to disrupt build-up
+        yourTactics.pressing = 80;
+        yourTactics.style = 65;
+        yourTactics.tempo = 70; // Balanced tempo
+        yourTactics.midfielders = 'Stay in position';
+        yourTactics.forwards = 'Support midfield';
+        yourTactics.marking = 'zonal'; // Zonal against passing teams
+    }
+    
+    if (oppPlayStyle === 'wing') {
+        // Against wing play: man marking, defend deep
+        yourTactics.pressing = 60;
+        yourTactics.style = 50;
+        yourTactics.tempo = 75; // Fast tempo to counter wing attacks
+        yourTactics.defenders = 'Stay behind'; // NEVER attacking full-backs against wing play
+        yourTactics.marking = 'man'; // Man marking against wingers
+        yourTactics.midfielders = 'Protect the defenders';
+    }
+    
+    if (oppPlayStyle === 'long') {
+        // Against long balls: compact defense, midfield protection
+        yourTactics.pressing = 65;
+        yourTactics.style = 55;
+        yourTactics.tempo = 70;
+        yourTactics.midfielders = 'Protect the defenders';
+        yourTactics.defenders = 'Stay behind';
+        yourTactics.marking = 'zonal';
+    }
+    
+    if (oppPlayStyle === 'shoot') {
+        // Against shoot on sight: high press, risky counter
+        yourTactics.pressing = 75;
+        yourTactics.style = 70;
+        yourTactics.tempo = 80; // Fast tempo to counter shots
+        yourTactics.forwards = 'Attack only';
+        yourTactics.marking = 'zonal';
+    }
+    
+    // ===== ADJUST BASED ON RELATIVE TEAM STRENGTH (OSM Guide Pt.2) =====
+    
+    if (strength === 'much-weaker' || strength === 'weaker') {
+        // When weaker: play defensively
+        yourTactics.pressing = Math.max(40, yourTactics.pressing - 20);
+        yourTactics.style = Math.max(35, yourTactics.style - 20);
+        yourTactics.tempo = Math.max(55, yourTactics.tempo - 15);
+        yourTactics.midfielders = 'Protect the defenders';
+        yourTactics.forwards = 'Help defend';
+        yourTactics.defenders = 'Stay behind';
+    }
+    
+    if (strength === 'stronger' || strength === 'much-stronger') {
+        // When stronger: play offensively
+        yourTactics.pressing = Math.min(85, yourTactics.pressing + 15);
+        yourTactics.style = Math.min(85, yourTactics.style + 15);
+        yourTactics.tempo = Math.min(90, yourTactics.tempo + 10);
+        yourTactics.midfielders = 'Go forward';
+        yourTactics.forwards = 'Attack only';
+        
+        // Attacking full-backs when stronger (except against wing play)
+        if (oppPlayStyle !== 'wing') {
+            yourTactics.defenders = 'Attacking full-backs';
+        }
+    }
+    
+    // ===== ADJUST BASED ON YOUR FORMATION =====
+    
+    // Formations with 5 defenders: more defensive
+    if (['532', '541A', '541B'].includes(formation)) {
+        yourTactics.pressing = Math.max(40, yourTactics.pressing - 10);
+        yourTactics.style = Math.max(45, yourTactics.style - 10);
+        yourTactics.defenders = 'Stay behind';
+    }
+    
+    // Formations with 3 defenders: more attacking
+    if (['352', '343A', '343B'].includes(formation)) {
+        yourTactics.pressing = Math.min(85, yourTactics.pressing + 10);
+        yourTactics.style = Math.min(85, yourTactics.style + 10);
+        yourTactics.defenders = 'Attacking full-backs';
+    }
+    
+    // 433 formations: balanced with wing focus
+    if (formation === '433A' || formation === '433B') {
+        yourTactics.pressing = 70;
+        yourTactics.style = 65;
+        yourTactics.tempo = 75;
+        yourTactics.midfielders = 'Go forward';
+        yourTactics.forwards = 'Attack only';
+    }
+    
+    // 442 formations: balanced
+    if (formation === '442A' || formation === '442B') {
+        yourTactics.pressing = 65;
+        yourTactics.style = 60;
+        yourTactics.tempo = 70;
+        yourTactics.midfielders = 'Stay in position';
+    }
+    
+    return yourTactics;
+}
+
+function calculateWinProbability(oppForm, oppPlayStyle, oppMarking, strength, yourTactics, yourFormation) {
+    let baseProbability = 50;
+    
+    // Adjust based on strength level
+    switch(strength) {
+        case 'much-weaker': baseProbability -= 25; break;
+        case 'weaker': baseProbability -= 12; break;
+        case 'equal': baseProbability += 0; break;
+        case 'stronger': baseProbability += 15; break;
+        case 'much-stronger': baseProbability += 25; break;
+    }
+    
+    // Formation matchups (from OSM guide)
+    const formationAdvantages = {
+        '433A': { 
+            '442B': 10, '532': 8, '352': 6,
+            '433A': 0, '433B': -2, '442A': -3
+        },
+        '433B': { 
+            '442A': 10, '532': 8, '4411': 7,
+            '433B': 0, '433A': -2, '442B': -3
+        },
+        '442A': { 
+            '433A': 10, '4231': 8, '352': 7,
+            '442A': 0, '442B': -2, '433B': -3
+        },
+        '442B': { 
+            '433A': 10, '352': 8, '343A': 7,
+            '442B': 0, '442A': -2, '433B': -3
+        },
+        '352': { 
+            '433A': 10, '442B': 8, '343A': 7,
+            '352': 0, '442A': -2, '433B': -3
+        },
+        '343A': { 
+            '532': 12, '541A': 10, '442A': 8,
+            '343A': 0, '343B': -2, '433A': -5
+        },
+        '343B': { 
+            '532': 12, '541B': 10, '442A': 8,
+            '343B': 0, '343A': -2, '433A': -5
+        },
+        '532': { 
+            '433A': 10, '442A': 8, '4231': 7,
+            '532': 0, '541A': -2, '541B': -3
+        },
+        '541A': { 
+            '433A': 12, '352': 10, '343A': 8,
+            '541A': 0, '541B': -2, '532': -3
+        },
+        '541B': { 
+            '433A': 10, '442A': 8, '4231': 7,
+            '541B': 0, '541A': -2, '532': -3
+        },
+        '631A': { 
+            '433A': 8, '442A': 7, '4231': 6,
+            '631A': 0, '631B': -2, '541A': -3
+        },
+        '631B': { 
+            '433A': 7, '442A': 6, '4231': 5,
+            '631B': 0, '631A': -2, '541B': -3
+        }
+    };
+    
+    // Add formation matchup bonus
+    if (formationAdvantages[oppForm] && formationAdvantages[oppForm][yourFormation]) {
+        baseProbability += formationAdvantages[oppForm][yourFormation];
+    }
+    
+    // Tactical adjustments (OSM guide principles)
+    
+    // Pressing adjustment: high press works well against passing, low against counters
+    if (oppPlayStyle === 'passing' && yourTactics.pressing >= 70) baseProbability += 8;
+    if (oppPlayStyle === 'counter' && yourTactics.pressing <= 50) baseProbability += 8;
+    if (oppPlayStyle === 'wing' && yourTactics.pressing >= 55 && yourTactics.pressing <= 70) baseProbability += 6;
+    
+    // Style adjustment: match style to opponent
+    if (oppPlayStyle === 'counter' && yourTactics.style >= 55 && yourTactics.style <= 70) baseProbability += 6;
+    if (oppPlayStyle === 'shoot' && yourTactics.style >= 60 && yourTactics.style <= 80) baseProbability += 6;
+    if (oppPlayStyle === 'passing' && yourTactics.style >= 50 && yourTactics.style <= 70) baseProbability += 5;
+    
+    // Tempo adjustment
+    if (oppPlayStyle === 'counter' && yourTactics.tempo <= 70) baseProbability += 5;
+    if (oppPlayStyle === 'passing' && yourTactics.tempo >= 60 && yourTactics.tempo <= 80) baseProbability += 5;
+    if (oppPlayStyle === 'wing' && yourTactics.tempo >= 70) baseProbability += 6;
+    if (oppPlayStyle === 'long' && yourTactics.tempo >= 65) baseProbability += 5;
+    if (oppPlayStyle === 'shoot' && yourTactics.tempo >= 75) baseProbability += 6;
+    
+    // Marking adjustment
+    if (oppPlayStyle === 'wing' && yourTactics.marking === 'man') baseProbability += 8;
+    if (oppPlayStyle === 'passing' && yourTactics.marking === 'zonal') baseProbability += 6;
+    if (oppPlayStyle === 'counter' && yourTactics.marking === 'zonal') baseProbability += 5;
+    
+    // Line tactics adjustments
+    if (oppPlayStyle === 'wing' && yourTactics.defenders === 'Stay behind') baseProbability += 10; // NEVER attacking full-backs vs wing play
+    if (oppPlayStyle === 'counter' && yourTactics.midfielders === 'Protect the defenders') baseProbability += 7;
+    if (oppPlayStyle === 'passing' && yourTactics.midfielders === 'Stay in position') baseProbability += 6;
+    if (oppPlayStyle === 'shoot' && yourTactics.forwards === 'Attack only') baseProbability += 5;
+    
+    return Math.max(10, Math.min(95, baseProbability));
+}
+
+function applyBonuses(baseProbability, venue, pitchLv, campInt, secret) {
+    let totalProbability = baseProbability;
+    const bonusBreakdown = [`Base Probability: ${baseProbability.toFixed(1)}%`];
+    
+    if (venue === 'home' && pitchLv > 0) {
+        const pitchBonus = pitchLv * 2;
+        totalProbability += pitchBonus;
+        bonusBreakdown.push(`Home Pitch Level ${pitchLv}: +${pitchBonus}%`);
+    }
+    
+    if (campInt > 0) {
+        const campBonus = campInt / 2;
+        totalProbability += campBonus;
+        bonusBreakdown.push(`Training Camp ${campInt}%: +${campBonus.toFixed(1)}%`);
+    }
+    
+    if (secret) {
+        totalProbability += 3;
+        bonusBreakdown.push('Secret Training: +3%');
+    }
+    
+    totalProbability = Math.max(1, Math.min(99, totalProbability));
+    
+    return { probability: totalProbability, breakdown: bonusBreakdown };
+}
+
+function showRecommendedSliders(yourTactics) {
+    updateSlider('recPressing', yourTactics.pressing);
+    updateSlider('recStyle', yourTactics.style);
+    updateSlider('recTempo', yourTactics.tempo);
+    
+    setSelectValue('recForwards', yourTactics.lineTactics.forwards);
+    setSelectValue('recMidfielders', yourTactics.lineTactics.midfielders);
+    setSelectValue('recDefenders', yourTactics.lineTactics.defenders);
+    setSelectValue('recMarking', yourTactics.marking);
+}
+
+function showMainCounter(oppForm, oppPlayStyle, oppMarking, yourFormation, yourTactics, probability, bonusResult, isPrimary) {
+    const preset = OPPONENT_PRESETS[oppForm] || OPPONENT_PRESETS['433A'];
+    
+    const mainCounter = document.getElementById('mainCounter');
+    if (mainCounter) {
+        mainCounter.innerHTML = `
+            <div class="formation">Your Formation: ${yourFormation} ${isPrimary ? '⭐' : ''}</div>
+            <div class="style">📋 Countering: ${oppForm} (${oppPlayStyle})</div>
+            <div class="style">🎯 Opponent Marking: ${oppMarking}</div>
+            <div style="margin:15px 0;">
+                <strong style="color:#00c853;">Win Probability: ${probability.toFixed(1)}%</strong>
+            </div>
+            <div class="description">
+                <strong>OSM Tactics Advice:</strong> ${preset.advice}<br><br>
+                <strong>Bonus Factors:</strong><br>
+                ${bonusResult.breakdown.join('<br>')}
+            </div>
+        `;
+    }
+}
+
+function showDetailedBreakdown(oppForm, oppPlayStyle, oppMarking, strength, yourFormation, yourTactics, probability) {
+    const preset = OPPONENT_PRESETS[oppForm] || OPPONENT_PRESETS['433A'];
+    
+    const html = `
+        <thead>
+            <tr>
+                <th>Tactical Element</th>
+                <th>Recommended Setting</th>
+                <th>OSM Tactics Reasoning</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Your Formation</strong></td>
+                <td>${yourFormation}</td>
+                <td>${getFormationAdvice(yourFormation)}</td>
+            </tr>
+            <tr>
+                <td><strong>Opponent Formation</strong></td>
+                <td>${oppForm}</td>
+                <td>${preset.advice}</td>
+            </tr>
+            <tr>
+                <td><strong>Opponent Playing Style</strong></td>
+                <td>${oppPlayStyle}</td>
+                <td>${getPlayStyleAdvice(oppPlayStyle)}</td>
+            </tr>
+            <tr>
+                <td><strong>Opponent Marking</strong></td>
+                <td>${oppMarking}</td>
+                <td>${getMarkingAdvice(oppMarking, oppPlayStyle)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Strength</strong></td>
+                <td>${strength.replace('-', ' ').toUpperCase()}</td>
+                <td>${getStrengthAdvice(strength)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Pressing Level</strong></td>
+                <td>${yourTactics.pressing}</td>
+                <td>${getPressureAdvice(yourTactics.pressing, oppPlayStyle, strength)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Style Slider</strong></td>
+                <td>${yourTactics.style}</td>
+                <td>${getStyleSliderAdvice(yourTactics.style, oppPlayStyle, strength)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Tempo</strong></td>
+                <td>${yourTactics.tempo}%</td>
+                <td>${getTempoAdvice(yourTactics.tempo, oppPlayStyle, strength)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Marking</strong></td>
+                <td>${yourTactics.marking.charAt(0).toUpperCase() + yourTactics.marking.slice(1)}</td>
+                <td>${getYourMarkingAdvice(yourTactics.marking, oppPlayStyle)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Line Tactics - Forwards</strong></td>
+                <td>${yourTactics.lineTactics.forwards}</td>
+                <td>${getLineTacticsAdvice('forwards', yourTactics.lineTactics.forwards, oppPlayStyle)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Line Tactics - Midfielders</strong></td>
+                <td>${yourTactics.lineTactics.midfielders}</td>
+                <td>${getLineTacticsAdvice('midfielders', yourTactics.lineTactics.midfielders, oppPlayStyle)}</td>
+            </tr>
+            <tr>
+                <td><strong>Your Line Tactics - Defenders</strong></td>
+                <td>${yourTactics.lineTactics.defenders}</td>
+                <td>${getLineTacticsAdvice('defenders', yourTactics.lineTactics.defenders, oppPlayStyle)}</td>
+            </tr>
+        </tbody>
+    `;
+    
+    const resTable = document.getElementById('resTable');
+    if (resTable) {
+        resTable.innerHTML = html;
+    }
+}
+
+// ===== ALTERNATIVE FORMATIONS GRID =====
+function showAlternativeFormationsGrid(currentFormation) {
+    const gridContainer = document.getElementById('alternativeFormationsGrid');
+    if (!gridContainer) return;
+    
+    gridContainer.innerHTML = '';
+    
+    alternativeFormationsData.forEach((formationData, index) => {
+        const formationCard = document.createElement('div');
+        formationCard.className = `formation-card ${formationData.formation === currentFormation ? 'active' : ''}`;
+        formationCard.innerHTML = `
+            <div class="formation-name">${formationData.formation}</div>
+            <div class="formation-rating">${formationData.rating}</div>
+            ${formationData.isPrimary ? '<div class="formation-tag">⭐ Primary</div>' : '<div class="formation-tag">🔄 Alternative</div>'}
+        `;
+        
+        formationCard.addEventListener('click', () => {
+            calculateAndDisplayFormation(formationData.formation, formationData.isPrimary);
+        });
+        
+        gridContainer.appendChild(formationCard);
+    });
+}
+
+// ===== HELPER FUNCTIONS FOR TACTICAL ADVICE =====
+function getFormationAdvice(formation) {
+    const formationAdvice = {
+        '433A': 'Balanced formation with strong wing play and midfield control.',
+        '433B': 'More defensive variant of 433, better suited for counter attacks.',
+        '442A': 'Classic formation with strong midfield presence and width.',
+        '442B': 'More defensive variant with emphasis on compactness.',
+        '352': 'Attacking formation with wing-backs providing width.',
+        '343A': 'Very attacking formation with three forwards.',
+        '343B': 'More balanced variant with defensive midfielders.',
+        '532': 'Defensive formation with five at the back.',
+        '541A': 'Ultra-defensive formation with focus on counters.',
+        '541B': 'Slightly more balanced defensive formation.',
+        '631A': 'Extremely defensive formation, hard to break down.',
+        '631B': 'Defensive formation with more midfield presence.'
+    };
+    
+    return formationAdvice[formation] || 'Standard formation. Adjust tactics based on opponent.';
+}
+
+function getPlayStyleAdvice(style) {
+    const styleAdvice = {
+        'counter': 'Defend deep and launch fast attacks. Use low press, high tempo.',
+        'passing': 'Control possession through midfield. Use high press, balanced tempo.',
+        'wing': 'Attack through the flanks. Use balanced press, fast tempo.',
+        'long': 'Skip midfield with direct passes. Use low press, very fast tempo.',
+        'shoot': 'Take shots whenever possible. Use high press, very fast tempo.'
+    };
+    
+    return styleAdvice[style] || 'Unknown playing style.';
+}
+
+function getMarkingAdvice(marking, style) {
+    if (style === 'wing') {
+        return 'Against wing play, consider man marking to track wingers.';
+    }
+    if (marking === 'zonal') {
+        return 'Zonal marking - cover spaces effectively. Good against teams that move the ball well.';
+    }
+    return 'Man marking - follow specific players. Good against formations with key individual threats.';
+}
+
+function getStrengthAdvice(strength) {
+    switch(strength) {
+        case 'much-weaker': return 'Play very defensively. Focus on counters and set pieces. Use compact formations like 532 or 541.';
+        case 'weaker': return 'Play cautiously. Balanced approach with defensive emphasis. Focus on organization.';
+        case 'equal': return 'Standard balanced approach. Exploit opponent weaknesses. Match them in midfield.';
+        case 'stronger': return 'Take initiative. Control the game and create chances. Use attacking formations.';
+        case 'much-stronger': return 'Dominate possession. High press and attacking football. Overload key areas.';
+        default: return 'Adjust tactics based on relative strength.';
+    }
+}
+
+function getPressureAdvice(pressing, style, strength) {
+    let advice = '';
+    
+    if (style === 'counter') {
+        advice = 'Low press (30-50) to defend deep against counter attacks.';
+    } else if (style === 'passing') {
+        advice = 'High press (70-85) to disrupt passing game and win ball high.';
+    } else if (style === 'wing') {
+        advice = 'Balanced press (55-70) to contain wing attacks.';
+    } else if (style === 'long') {
+        advice = 'Medium press (50-65) to prevent long balls.';
+    } else if (style === 'shoot') {
+        advice = 'High press (70-85) to pressure shooters.';
+    }
+    
+    if (strength === 'much-weaker' || strength === 'weaker') {
+        advice += ' Lower due to weaker team.';
+    } else if (strength === 'stronger' || strength === 'much-stronger') {
+        advice += ' Higher due to stronger team.';
+    }
+    
+    return advice;
+}
+
+function getStyleSliderAdvice(styleValue, oppStyle, strength) {
+    let advice = '';
+    
+    if (oppStyle === 'counter') {
+        advice = 'Medium-high (55-70) to create chances while staying organized.';
+    } else if (oppStyle === 'passing') {
+        advice = 'Balanced (50-65) to match possession play.';
+    } else if (oppStyle === 'wing') {
+        advice = 'Medium (50-65) to balance attack and defense against wings.';
+    } else if (oppStyle === 'long') {
+        advice = 'Medium (55-70) to counter direct play.';
+    } else if (oppStyle === 'shoot') {
+        advice = 'Medium-high (60-75) to match attacking intent.';
+    }
+    
+    if (strength === 'much-weaker' || strength === 'weaker') {
+        advice = 'Lower (30-50) to play safe when weaker.';
+    } else if (strength === 'stronger' || strength === 'much-stronger') {
+        advice = 'Higher (65-85) to take risks when stronger.';
+    }
+    
+    return advice;
+}
+
+function getTempoAdvice(tempo, oppStyle, strength) {
+    let advice = '';
+    
+    if (oppStyle === 'counter') {
+        advice = 'Medium (60-75) to maintain possession against counters.';
+    } else if (oppStyle === 'passing') {
+        advice = 'Medium (60-75) for controlled build-up.';
+    } else if (oppStyle === 'wing') {
+        advice = 'Fast (70-85) to exploit wing spaces quickly.';
+    } else if (oppStyle === 'long') {
+        advice = 'Fast (70-85) to match direct play.';
+    } else if (oppStyle === 'shoot') {
+        advice = 'Very fast (75-90) for quick transitions.';
+    }
+    
+    if (strength === 'much-weaker' || strength === 'weaker') {
+        advice = 'Slower (50-65) to minimize mistakes when weaker.';
+    } else if (strength === 'stronger' || strength === 'much-stronger') {
+        advice = 'Faster (70-90) to dominate when stronger.';
+    }
+    
+    return advice;
+}
+
+function getYourMarkingAdvice(marking, oppStyle) {
+    if (oppStyle === 'wing') {
+        return 'Man marking recommended to track their wingers and prevent crosses.';
+    }
+    if (oppStyle === 'passing' || oppStyle === 'counter') {
+        return 'Zonal marking recommended to cover spaces against organized attacks.';
+    }
+    if (marking === 'zonal') {
+        return 'Zonal marking - cover spaces effectively. Good against teams that move the ball well.';
+    }
+    return 'Man marking - follow specific players. Good against formations with key individual threats.';
+}
+
+function getLineTacticsAdvice(line, setting, oppStyle) {
+    const advice = {
+        forwards: {
+            'Attack only': 'Forwards stay high to stretch defense. Good against deep defenses and for counter attacks.',
+            'Support midfield': 'Forwards drop to link play. Good against high pressing and for possession play.',
+            'Help defend': 'Forwards drop deep to help defense. Use when desperately needing not to concede.'
+        },
+        midfielders: {
+            'Stay in position': 'Midfielders maintain shape. Good against organized teams and for possession play.',
+            'Go forward': 'Midfielders support attack. Use when stronger or needing goals against defensive teams.',
+            'Protect the defenders': 'Midfielders shield defense. Use against counter attacks or when weaker.'
+        },
+        defenders: {
+            'Attacking full-backs': 'Full-backs push forward. Use when stronger or against narrow formations.',
+            'Stay behind': 'Defenders stay deep. Use against wing play or fast attacks.',
+            'Move forward': 'Defenders support midfield. Use when much stronger for all-out attack.'
+        }
+    };
+    
+    // Special rules from OSM guide
+    if (line === 'defenders' && setting === 'Attacking full-backs' && oppStyle === 'wing') {
+        return 'NEVER use attacking full-backs against wing play! ' + advice[line][setting];
+    }
+    
+    if (line === 'midfielders' && setting === 'Protect the defenders' && oppStyle === 'counter') {
+        return 'Crucial against counter attacks. ' + advice[line][setting];
+    }
+    
+    if (line === 'forwards' && setting === 'Attack only' && oppStyle === 'shoot') {
+        return 'Standard for shoot on sight. ' + advice[line][setting];
+    }
+    
+    return advice[line][setting] || 'Standard tactical instruction.';
+}
+
+// ===== PURCHASE HANDLING =====
+function handlePurchase(tier) {
+    alert(`Redirecting to checkout for ${tier.toUpperCase()} tier...`);
+    localStorage.setItem('osm_tier', tier);
+    // In real app, redirect to payment page
+    // window.location.href = `/checkout?tier=${tier}`;
+}

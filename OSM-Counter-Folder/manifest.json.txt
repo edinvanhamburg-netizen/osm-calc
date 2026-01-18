@@ -1,0 +1,49 @@
+{
+  "name": "OSM Counter NG",
+  "short_name": "OSM Counter",
+  "description": "Advanced formation counter-tactics engine for football/soccer",
+  "theme_color": "#002c62",
+  "background_color": "#0c1120",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "/",
+  "categories": ["sports", "games", "utilities"],
+  "icons": [
+    {
+      "src": "https://i.ibb.co/dsn9dWw5/zzzz.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://i.ibb.co/tMSMxmwN/Gemini-Generated-Image-ticrt2ticrt2ticr.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "https://i.ibb.co/tMSMxmwN/Gemini-Generated-Image-ticrt2ticrt2ticr.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "OSM Counter Dashboard"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Counter Analysis",
+      "short_name": "Analyze",
+      "description": "Create a new counter strategy",
+      "url": "/#engineInputs",
+      "icons": [
+        {
+          "src": "https://i.ibb.co/dsn9dWw5/zzzz.jpg",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ]
+}
